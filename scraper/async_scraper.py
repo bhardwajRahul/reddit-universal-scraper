@@ -13,6 +13,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 import sys
 
+if sys.platform.startswith('win'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import USER_AGENT, MIRRORS, ASYNC_MAX_CONCURRENT, ASYNC_BATCH_SIZE, PROXY_URL, get_formatted_proxy_url
 import subprocess
@@ -21,11 +28,19 @@ import tempfile
 # Semaphore to limit concurrent requests
 semaphore = None
 
-async def fetch_json(session, url, retries=3, proxy=None):
+async def fetch_json(session, url, retries=3, proxy=None, warmup_url=None):
     """Fetch JSON with retry logic."""
     for attempt in range(retries):
         try:
             rotated_proxy = get_formatted_proxy_url(proxy, force_rotate=True) if proxy else proxy
+            
+            if warmup_url:
+                try:
+                    async with session.get(warmup_url, timeout=aiohttp.ClientTimeout(total=15), proxy=rotated_proxy) as warmup_response:
+                        await warmup_response.read()
+                except Exception:
+                    pass
+
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15), proxy=rotated_proxy) as response:
                 if response.status == 200:
                     return await response.json()
@@ -40,14 +55,18 @@ async def fetch_posts_page(session, base_url, target, after=None, is_user=False,
     """Fetch a single page of posts."""
     if is_user:
         path = f"/user/{target}/submitted.json"
+        warmup_path = f"/user/{target}/"
     else:
         path = f"/r/{target}/new.json"
+        warmup_path = f"/r/{target}/"
     
     url = f"{base_url}{path}?limit={batch_size}&raw_json=1"
     if after:
         url += f"&after={after}"
     
-    return await fetch_json(session, url, proxy=proxy)
+    warmup_url = f"{base_url}{warmup_path}" if (not after and 'reddit.com' in base_url) else None
+    
+    return await fetch_json(session, url, proxy=proxy, warmup_url=warmup_url)
 
 async def download_media_async(session, url, save_path, proxy=None):
     """Download media file asynchronously."""
@@ -177,7 +196,8 @@ async def fetch_comments_async(session, permalink, proxy=None):
     
     async with semaphore:
         url = f"https://old.reddit.com{permalink}.json?limit=100"
-        data = await fetch_json(session, url, proxy=proxy)
+        warmup_url = f"https://old.reddit.com{permalink}"
+        data = await fetch_json(session, url, proxy=proxy, warmup_url=warmup_url)
         
         if data and len(data) > 1:
             return parse_comments_sync(data[1]['data']['children'], permalink)
@@ -356,7 +376,14 @@ async def scrape_async(target, limit=100, is_user=False, download_media=True, sc
         except:
             pass
     
-    async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
         after = None
         total_fetched = 0
         

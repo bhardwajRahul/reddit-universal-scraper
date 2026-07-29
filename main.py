@@ -66,13 +66,26 @@ def rotate_session_proxy(country=None, session_id=None, force_rotate=False):
 
 SEEN_URLS = set()
 SESSION = requests.Session()
-SESSION.headers.update({"User-Agent": USER_AGENT})
+SESSION.headers.update({
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-Requested-With": "XMLHttpRequest",
+})
 
-def request_with_retry(url, retries=3, backoff=2, **kwargs):
+def request_with_retry(url, retries=3, backoff=2, warmup_url=None, **kwargs):
     """Makes a GET request with retry logic, especially useful for rotating proxies."""
     for attempt in range(retries):
         try:
             rotate_session_proxy(force_rotate=True)
+            
+            if warmup_url:
+                try:
+                    SESSION.get(warmup_url, **kwargs)
+                except Exception:
+                    pass
+                    
             response = SESSION.get(url, **kwargs)
             if response.status_code == 200:
                 content_type = response.headers.get("Content-Type", "")
@@ -357,10 +370,12 @@ def scrape_comments(permalink, max_depth=3):
     try:
         if not permalink.startswith('http'):
             url = f"https://old.reddit.com{permalink}.json?limit=100"
+            warmup_url = f"https://old.reddit.com{permalink}"
         else:
             url = f"{permalink}.json?limit=100"
+            warmup_url = permalink if not permalink.endswith('.json') else permalink[:-5]
         
-        response = request_with_retry(url, timeout=15)
+        response = request_with_retry(url, timeout=15, warmup_url=warmup_url)
         if response.status_code != 200:
             return comments
         
@@ -511,8 +526,10 @@ def run_full_history(target, limit, is_user=False, download_media_flag=True,
                 try:
                     if is_user:
                         path = f"/user/{target}/submitted.json"
+                        warmup_path = f"/user/{target}/"
                     else:
                         path = f"/r/{target}/new.json"
+                        warmup_path = f"/r/{target}/"
                     
                     # Use proper batch size - min of remaining posts needed or 100 (Reddit's max per request)
                     batch_size = min(100, limit - total_posts)
@@ -520,8 +537,10 @@ def run_full_history(target, limit, is_user=False, download_media_flag=True,
                     if after:
                         target_url += f"&after={after}"
                     
+                    warmup_url = f"{base_url}{warmup_path}" if (not after and 'reddit.com' in base_url) else None
+                    
                     print(f"\n📡 Fetching from: {base_url}")
-                    response = request_with_retry(target_url, timeout=15)
+                    response = request_with_retry(target_url, timeout=15, warmup_url=warmup_url)
                     
                     if response.status_code == 200:
                         data = response.json()

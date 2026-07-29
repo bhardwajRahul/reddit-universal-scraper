@@ -4,8 +4,34 @@ Subreddit Statistics - Subscribers, rules, mods, and metadata
 import requests
 from datetime import datetime
 import json
+import sys
+
+if sys.platform.startswith('win'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+SESSION = requests.Session()
+SESSION.headers.update({
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-Requested-With": "XMLHttpRequest",
+})
+_WARMED_UP = set()
+
+def ensure_warmed_up(subreddit):
+    if subreddit not in _WARMED_UP:
+        try:
+            SESSION.get(f"https://old.reddit.com/r/{subreddit}/", timeout=15)
+        except Exception:
+            pass
+        _WARMED_UP.add(subreddit)
 
 def get_subreddit_about(subreddit):
     """
@@ -20,7 +46,8 @@ def get_subreddit_about(subreddit):
     url = f"https://old.reddit.com/r/{subreddit}/about.json"
     
     try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        ensure_warmed_up(subreddit)
+        response = SESSION.get(url, timeout=15)
         
         if response.status_code != 200:
             print(f"❌ Failed to fetch r/{subreddit} info: {response.status_code}")
@@ -65,7 +92,8 @@ def get_subreddit_rules(subreddit):
     url = f"https://old.reddit.com/r/{subreddit}/about/rules.json"
     
     try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        ensure_warmed_up(subreddit)
+        response = SESSION.get(url, timeout=15)
         
         if response.status_code != 200:
             return []
@@ -100,7 +128,8 @@ def get_subreddit_mods(subreddit):
     url = f"https://old.reddit.com/r/{subreddit}/about/moderators.json"
     
     try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        ensure_warmed_up(subreddit)
+        response = SESSION.get(url, timeout=15)
         
         if response.status_code != 200:
             return []
@@ -133,7 +162,8 @@ def get_subreddit_flairs(subreddit):
     url = f"https://old.reddit.com/r/{subreddit}/api/link_flair_v2.json"
     
     try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        ensure_warmed_up(subreddit)
+        response = SESSION.get(url, timeout=15)
         
         if response.status_code != 200:
             return []
